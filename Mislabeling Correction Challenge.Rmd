@@ -1,0 +1,1820 @@
+---
+title: "STAT5003 - Group 29 - Project  PrecisionFDA NCI-CPTAC Multi-omics Enabled Sample Mislabeling Correction Challenge "
+author: "Alister Palmer, Yujun He, Taleni Patterson, Dan Bridgman, Xinghong Guo"
+date: "18 October 2018"
+output:
+  html_document:
+    toc: true
+    df_print: paged
+    toc_depth: 2
+---
+
+### Report Structure
+
+1) Introduction
+  - Aim
+  - Dataset
+  - Literature Review
+2) Feature Engineering
+  - Missing Values (0s, mean col value, Jade's Method)
+  - Dimensionality Reduction
+  - Feature Selection (VarselRF, Boruta & XGboost)
+  - Class Imbalance (more data, upsample, downsample, SMOTE)
+3) Classification Models
+  - Augmented SVM
+  - Ensemble (SVM/LDA/kNN)
+  - ADASampling
+4) Validation Methods
+5) Results
+  - Results + Visualization (ROC, AUC etc)
+  - Discussion
+  - Conclusion
+
+## 1.0 Introduction
+
+With the advent of Kaggle competitions and competitions such as [the Netflix Prize](https://netflixprize.com/) it has become more common for companies to embrace the broader data-science community to solve their business challenges. By making selected datasets publicly available, often with financial incentives, they allow for a diverse array of approachs to be applied to the designated challenge. Notably, public organizations have also sought to harness the masses and emerging technologies to tackle previously unaddressable problems. The United States of America's Food and Drug Administration (FDA), in cooperation with the National Cancer Institute (NCI) have issued a challenge to systematically detect mislabelling of patient samples, a long-standing issue in the medical field.
+
+## 1.1 Aim
+By using provided proteomic patient test data (features) and clincial patient information (labels) the group seeks to implement a predictive model to consistently identify mislablleing while addressing incomplete data, class imbalance and a material degree of labelling noise. For each pair of features and label-data, the model will state whether it is mislabelled and a probability of mislabelling.
+
+## 1.2 Dataset:
+The data provided includes:
+- Training Proteomic Data
+- Training Clinical Data
+- Training Mislabel Data
+- Test Proteomic Data
+- Test Clinical Data
+
+### 1.2.1 Clinical & Training Label Data
+The clinical data consists of three columns: a sample identifier (eg 'Training_1'), gender('male' or 'female'), and Microsatellite instability diagnosis ('MSI-Low/MSS' / 'MSI-High'.
+
+Clinical Training Data Distribution:
+- 62 MSI-Low/MSS vs 18 MSI-High
+- 53 Female vs 27 Male
+
+Clinical Test Data Distribution:
+- 66 MSI-Low/MSS vs 12 MSI-High
+- 31 Female vs 49 Male
+
+Class Label Data
+- 68 labelled vs 12 mis-labelled
+
+There is a skew in the samples towards MSI-Low/MSS for both train and test data, which indicates the group will need to consider methods to rectify class imbalance to improve predictive ability. There is differing skew on the gender value between train and test data but it can reasonable be expected that the mislabelling model is intended for use with the general population so class imbalance will need to be addressed for gender as well.
+
+With 80 samples, this dataset is considered to be relatively small and this is excacerbated by the 12 mislabelled samples, leaving 68 correctly labelled samples and represents a labelling noise challenge. This could addressed by techiniques such as excluding incorrectly labelled samples from training, excluding potentially useful information, or an approach that attempts to re-label mislabelled samples.
+
+#### 1.2.2 Proteomic Data
+The proteomic data consists of 4118 features, each representing individual proteomics data from patient samples. Feauture selection will need to be used to eliminate unnecceary features and limit computational intensity. Also, there is a signifant degree of missing values that the group will need impute in order to be able to apply a variety of classification models as shown in Figure 1.
+
+A small minority of feautres have more than 50% missing values. The FDA challenge specifications state that proteomic data was removed if more than 50% of values were missing except when related to the X or Y chromosome and by extension gender. Thus, the group must consider how to treat this subset of values in both imputation and class imbalance methods.
+
+## 1.3 Literature Review
+The field of Proteomics is relatively new, with the term first [coined in 1997](https://doi.org/10.1017%2FS0033583597003399) after advancements in sequencing techniques allowed for significant automation protein analysis. This has allowed for researchers to seek determine links between a patients characteristcs (such as gender) or propensity to suffer a specfic medical conditions and specific proteins. Specifically there has been signficante research conducted with regards to microsatellite instability and its role in tumors and vacrious types of cancer. The group considered it prudent to review the available research to potentially identify significant proteins that will may enhance predictive ability.
+
+#### 1.3.1 Proteins related to Microsatellite Instability (MSI)
+As DNA replicates in the human body, there is a system for detecting mutations (DNA mismatch) and repairing these errors. When this DNA repair system is impaired, the resultant errors in replicated DNA is known as [microsatellite instability](https://www.gastrojournal.org/article/S0016-5085(10)00169-1/fulltext?referrer=https%3A%2F%2Fen.wikipedia.org%2F#sec7.11). A high level of this instability (MSI-High) has been found in individuals with a [high susceptibility to cancers](https://www.sciencedirect.com/science/article/pii/0959437X95800557?via%3Dihub). Further,  [Hereditary nonpolyposis colorectal cancer (HNPCC)](https://jmg.bmj.com/content/38/5/318) (Lynch Syndrome) has been shown to be realted to MSH-High status.
+
+Specifically, mutations in DNA mismatch repair (MMR) proteins MLH1, MSH2 and MSH6 have been determined to [results in MSI-High and potentially coloretal cancer](https://jmg.bmj.com/content/38/5/318). Additionally, there is a strong inverse relationship between mutations of protein P53 (TP53BP1 TP53I11 TP53I3 TP53RK in our dataset) and [MSI-High status](ttps://www.researchgate.net/profile/Ilan_Kirsch/publication/6574665_Prognostic_and_Predictive_Roles_of_High-Degree_Microsatellite_Instability_in_Colon_Cancer_A_National_Cancer_Institute-National_Surgical_Adjuvant_Breast_and_Bowel_Project_Collaborative_Study/links/5602cfcf08ae849b3c0f70eb/Prognostic-and-Predictive-Roles-of-High-Degree-Microsatellite-Instability-in-Colon-Cancer-A-National-Cancer-Institute-National-Surgical-Adjuvant-Breast-and-Bowel-Project-Collaborative-Study.pdf). Conversely, VPS13A, VPS13B, VPS13C, VPS33A, VPS35, VPS37B, VPS41, and VPS54 have been [associated with MSI-High status](https://www.sciencedirect.com/science/article/pii/S0046817711001559?via%3Dihub).
+
+These key proteins are present in the dataset and the group may consider feature selection methods that incorporate this research. Given this field is still young, we consider there is potentially information in other proteomic data that has yet to be determined signficant by research.
+
+### Setup & installing packages that maybe needed - To add new packages just add to list.of.packages vector
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#knitr::opts_knit$set(root.dir = '')
+
+packages <- c('pastecs','kableExtra', 'ggplot2','VIM','caret', 'caretEnsemble', 'randomForest', 'dplyr','DMwR','microbenchmark','doParallel','doFuture','tictoc','varSelRF','imputeTS','devtools','logspline','rlist','stringi','Boruta','hyperSMURF','unbalanced','AdaSampling','e1071','Rcpp','missForest','xgboost','dismo', 'DT','ROCR') #'MOFAtools'
+
+for (package in packages) {
+    if (!require(package, character.only=T, quietly=T)) {
+        install.packages(package)
+        library(package, character.only=T)
+    }
+}
+
+```
+
+### Setting up the environment to use all cores minus 1 for greater parallelism
+```{r, include=FALSE}
+registerDoFuture()
+plan(multiprocess, workers = availableCores() - 1)
+```
+
+## 1.4 - Dataset review and import
+```{r}
+# Reading in the functions to import data.
+source("PrepFunctions.R")
+
+## TRAINING DATA ###
+file_data_cli <- "Data/Group project/train_cli.tsv"
+file_data_pro <- "Data/Group project/train_pro.tsv"
+training_labels <- "Data/Group project/sum_tab_1.csv"
+
+## TEST DATA ###
+file_data_cli_test <- "Data/Group project/test_cli.tsv"
+file_data_pro_test <- "Data/Group project/test_pro.tsv"
+
+
+# Calling the import_data function from "0 - PrepFunctions.R" for training data
+train_cli <- importdata(filetype = "txt",file = file_data_cli,header = TRUE)
+train_pro <- importdata(filetype = "txt",file = file_data_pro,header = TRUE)
+
+# Calling the import_data function from "0 - PrepFunctions.R" for test data
+test_cli <- importdata(filetype = "txt",file = file_data_cli_test,header = TRUE)
+test_pro <- importdata(filetype = "txt",file = file_data_pro_test,header = TRUE)
+
+# Bringing in the labels for training (of which we're not sure which ones are correct and which ones aren't)
+train_labels <- importdata(filetype = "csv",file = training_labels,header = TRUE)
+
+```
+
+### 1.4.1 Transposing the train & test proteomic files to allow protein strands to become features
+### and training numbers to become ids
+```{r}
+
+# Transpose the original data frame
+t_train_pro <- transpose(train_pro)
+colnames(t_train_pro) <- rownames(train_pro)
+
+# Get the sample id to join to other columns
+sample <- colnames(train_pro)
+
+# Column bind
+t_train_pro <- cbind(sample,t_train_pro)
+colnames(t_train_pro)[1] <- "sample"
+
+# Transpose the original data frame
+t_test_pro <- transpose(test_pro)
+colnames(t_test_pro) <- rownames(test_pro)
+
+# Get the sample id to join to other columns
+sample <- colnames(test_pro)
+
+# Column bind
+t_test_pro <- cbind(sample,t_test_pro)
+colnames(t_test_pro)[1] <- "sample"
+
+```
+
+### 1.4.2 Converting factors to numericals
+```{r}
+train_cli$gender <- as.numeric(train_cli$gender)
+train_cli$msi <- as.numeric(train_cli$msi)
+
+test_cli$gender <- as.numeric(test_cli$gender)
+test_cli$msi <- as.numeric(test_cli$msi)
+
+```
+
+### 1.4.3 Merging/joining data frames - Cli data, labels and proteomic data
+```{r}
+# Check ?merge for this section
+# Just the clinical and label data
+labels_and_cli <- merge(train_cli,train_labels, by.x = "sample", by.y ="sample", all.x = TRUE )
+
+# Just the proteomic and label data
+labels_and_pro  <- merge(t_train_pro, train_labels, by.x = "sample", by.y ="sample", all.x = TRUE )
+
+# Merging the clinical, labels and proteomic data for train
+merged_dfs <- merge(labels_and_cli,t_train_pro, by.x = "sample", by.y ="sample", all.x = TRUE )
+
+# Merging the clinical, labels and proteomic data for test
+merged_dfs_test <- merge(test_cli,t_test_pro, by.x = "sample", by.y ="sample", all.x = TRUE )
+
+# Changing the mismatch column to a factor
+merged_dfs$mismatch <- as.factor(merged_dfs$mismatch)
+```
+
+# 2 - Feature engineering
+## 2.1 - Missing data processing
+
+### 2.1.1 - Replace NAs with column minimum value
+This method attempts to avoid zero values which may not be realistic. Further, by avoiding using the mean in this case, which is effective two binary classification problems (male vs female, low-MSI/high-MSI), it was hoped that a more seperation in classes could be achieved.
+
+Closer inspection of the FDA challenge made it clear that individual protein feature data that had more than 50% NAs was removed except where the protein was related to the 23rd chromosome and therefore gender. Thus, the group considered this method but ultimately decided that a more sophisticated approach, separately treating proteins with over 50% NAs and those with less than 50% was more appropriate.
+
+### 2.1.2 - Hybrid Method
+As alluded to above, for columns with >50% NAs the below sets the feature in question to 0. For columns with <50% NAs, the missing values are replaced with the column mean.
+```{r}
+# Checking if NAs are present
+# How many columns have NAs? What percentage?
+#checkremoveNAs(merged_dfs)
+#checkremoveNAs(merged_dfs_test)
+
+merged_dfs[,5:ncol(merged_dfs)] <- sapply(merged_dfs[,5:ncol(merged_dfs)], as.numeric)
+for (c in 5:ncol(merged_dfs)) {
+  if (sum(is.na(merged_dfs[,c])>0.5*ncol(merged_dfs))){
+    merged_dfs[,c] <- na.replace(merged_dfs[,c], 0)
+  }
+  else if (sum(is.na(merged_dfs[,c]) == length(merged_dfs[,'gender'] == '2'))) {
+    merged_dfs[,c] <- na.replace(merged_dfs[,c], 0)
+  }
+  else {
+    m <- mean(merged_dfs[,c],  na.rm = TRUE)
+    merged_dfs[,c] <- na.replace(merged_dfs[,c], m)
+  }
+}
+
+# Getting rid of columns with all NaNs
+merged_dfs <- subset(merged_dfs, select=-TMEM35A)
+
+
+# NAs replacement for test data.
+merged_dfs_test[,3:ncol(merged_dfs_test)] <- sapply(merged_dfs_test[,3:ncol(merged_dfs_test)], as.numeric)
+for (c in 3:ncol(merged_dfs_test)) {
+  if (sum(is.na(merged_dfs_test[,c]) > 0.5*ncol(merged_dfs_test))){
+    merged_dfs_test[,c] <- na.replace(merged_dfs_test[,c], 0)
+  }
+  else if (sum(is.na(merged_dfs_test[,c]) == length(merged_dfs_test[,'gender'] == '1'))) {
+    merged_dfs_test[,c] <- na.replace(merged_dfs_test[,c], 0)
+  }
+  else {
+    m <- mean(merged_dfs_test[,c],  na.rm = TRUE)
+    merged_dfs_test[,c] <- na.replace(merged_dfs_test[,c], m)
+  }
+}
+
+# Getting rid of columns with all NaNs
+merged_dfs_test <- subset(merged_dfs_test, select=-c(CT45A2,TKTL1))
+
+# Renaming columns that have - in them to put _ instead to avoid later errors
+names(merged_dfs) <- gsub("-", "_", names(merged_dfs))
+names(merged_dfs_test) <- gsub("-", "_", names(merged_dfs_test))
+
+```
+![Missing data - Training data set](NAs_Train.jpg)
+![Missing data - Test data set](NAs_Test.jpg)
+
+
+#### 2.1.3 - missForest for Missing Value Imputation
+The group explored the use of random forests for each variable. The advantage of this approach is that it leverages observed values to estimate a weighted average missing values and it is relatively simple as a non-parametric method that makes no assumption of the distribution.
+
+In practice, the group found this approach to relatively slow and cumbersome to implement effectively without significant improvement over more straightforward approachs and it did not appear to handle features that were very sparse, which is prominent in this dataset. Therefore, we chose not to utilise this method in our model.
+
+```{r, eval=FALSE}
+#Run missForest to impute NAs
+df <- merged_dfs
+
+# Define output dataframe
+merged_dfs.missf <- df
+
+# Apply missForest
+missf_output <- missForest(df[,-c(1:4)], maxiter = 1, ntree=10, mtry=50)
+merged_dfs.missf[,-c(1:4)] <- missf_output$ximp
+```
+
+#### 2.1.4 - kNN Imputation
+A k nearest neighbours approach to imputations intuitively is attractive, by looking for the attributes of surrounding samples to approximate imputation values. As the dataset is normalized, it is suited to a euclidean distance appraoch to determining neighbouts.
+
+Typically, choosing a low value of k exposes the proceedure to a higher degree of signal noise. Unfortunately in this dataset, there are relatively few samples among the 4 classes (generated later in the document) a single class has only 5 correctly-labeled samples. Further, this method was quite impractical, taking a number of hours to run on a local machine and hampering the group's ability to quickly iterate. Thus, we decided to not use this approach.
+
+```{r, eval=FALSE}
+#Run kNNImputation to impute NAs:
+#Define input dataframe
+df <- merged_dfs
+# Define output dataframe
+merged_dfs.knnimpute <- df
+
+# Apply kNNImputation (& update output dataframe with the results
+knn_output <- knnImputation(df[,-c(1:4)], k=3, meth='weighAvg')
+merged_dfs.knnimpute[,-c(1:4)] <- knn_output
+```
+
+## 2.2 - Feature Space analysis
+
+### 2.2.1 - Principal component analysis on project data
+
+Principal component analysis decomposes the spread of data into a series of principal components, similar to a better set of axis. We apply PCA  on the proteomics data to understand the distribution of the data. From the graph we can see that the overwhelming majority of the explained variation is capture in the first principle component. This suggests that a selection of key features that best express this principle component explain the majority of the explained variation.
+
+```{r}
+# Just making sure I don't touch merged_dfs
+pca.data <- merged_dfs
+# PCA using the function prcomp that comes with in the base packages
+pca <- prcomp(as.data.frame(t(pca.data[,5:ncol(pca.data)])), scale. = T)
+
+# Defining variance and variance explained from the PCA output
+pca.var <- pca$sdev^2
+var.exp <- pca.var/sum(pca.var) * 100
+
+# Plotting Variance explained
+plot(var.exp, ylab = "Explained variance (%)", main = "PCA on Training data set")
+```
+### 2.2.2 - Multi-Omics Factor Analysis
+
+MOFA is a Multi-omics Factor Analysis algorithm created by Argelaguet et al (2018). The package is intended to be a substitute for PCA analysis in proteomic field, especially  in situations requiring unsupervised integration. We have used MOFA analysis to double the results of our feature selection and PCA. From the outputted graph we can see features along the X with factors on the Y axis. These factors reflect principle components in PCA.
+
+Looking at the dendrogram on the y axis we can see that LF1, the first factor, is the most important and we can see that and within that factor we can that a lot of features seem to be highly correlated. A number of high correlations further supports our analysis that the large number of noisy features can be expressed in a very small amount of key features.
+
+```{r, eval = FALSE}
+source("https://bioconductor.org/biocLite.R")
+biocLite("GenomeInfoDbData")
+library('GenomeInfoDbData')
+
+#install.packages('stringi')
+devtools::install_github("bioFAM/MOFA", subdir="MOFAtools")
+library('MOFAtools')
+
+# Removing any full NA columns from the original proteomic dataset
+tt <-  train_pro[-which(apply(data.frame(train_pro),1, function(x) all(is.na(x)))),]
+
+# Loads the preset default options from the MOFA github
+mofa.train <- createMOFAobject(list(tt))
+DataOptions <- getDefaultDataOptions()
+ModelOptions <- getDefaultModelOptions(mofa.train)
+ModelOptions$numFactors <- 25     # This sets the maximum number of factors as you'll see the optimal is actually much smaller
+TrainOptions <- getDefaultTrainOptions()
+TrainOptions$DropFactorThreshold <- 0.02
+
+# Sets seed
+TrainOptions$seed <- 42
+
+# Defines the model options previously defined.
+MOFAobject <- prepareMOFA(
+  mofa.train,
+  DataOptions = DataOptions,
+  ModelOptions = ModelOptions,
+  TrainOptions = TrainOptions
+)
+
+# Running the MOFA algorithm
+MOFAobject <- runMOFA(MOFAobject)
+
+# Using the output of MOFA to calculate variance explained
+r2 <- calculateVarianceExplained(MOFAobject)
+r2$R2Totala
+head(r2$R2PerFactor)
+plotVarianceExplained(MOFAobject)
+
+# Plotting everything
+plotWeightsHeatmap(
+  MOFAobject,
+  view=1,
+  factors = 1:5,
+  show_colnames = FALSE
+)
+
+plotWeights(
+  MOFAobject,
+  view = 1,
+  factor = 1,
+  nfeatures = 5
+)
+
+
+```
+![MOFA Heat Map](MOFA.png)
+
+## 2.3 - Feature engineering and selection
+### 2.3.1 - Creating a new 'Class' label and setting up data to be 4 class, in addition to binary mismatch response variable
+
+It is suggested that by engineering a new class label we can have greater precision per class for class imbalance mitigation as well as greater accuracy for each combination of gender/MSI split.
+```{r}
+
+merged_dfs['Class'] <- NA
+for (i in 1:nrow(merged_dfs)) {
+  if (merged_dfs[i,'gender']=='1' & merged_dfs[i,'msi'] == '1'){
+    merged_dfs[i,'Class'] <- 1 #Female, MSI-H
+  }
+  else if (merged_dfs[i,'gender']=='1' & merged_dfs[i,'msi'] == '2'){
+    merged_dfs[i,'Class'] <- 2 #Female, MSS
+  }
+  else if (merged_dfs[i,'gender']=='2' & merged_dfs[i,'msi'] == '1'){
+    merged_dfs[i,'Class'] <- 3 #Male, MSI-H
+  }
+  else if (merged_dfs[i,'gender']=='2' & merged_dfs[i,'msi'] == '2'){
+    merged_dfs[i,'Class'] <- 4 #Male, MSS
+  }
+}
+"Train Class breakdown: 1 = Female, MSI-H, 2 =Female, MSS, 3 = Male, MSI-H, 4 = Male, MSS"
+table(merged_dfs$Class)
+
+merged_dfs_test['Class'] <- NA
+for (i in 1:nrow(merged_dfs_test)) {
+  if (merged_dfs_test[i,'gender']=='1' & merged_dfs_test[i,'msi'] == '1'){
+    merged_dfs_test[i,'Class'] <- 1 #Female, MSI-H
+  }
+  else if (merged_dfs_test[i,'gender']=='1' & merged_dfs_test[i,'msi'] == '2'){
+    merged_dfs_test[i,'Class'] <- 2 #Female, MSS
+  }
+  else if (merged_dfs_test[i,'gender']=='2' & merged_dfs_test[i,'msi'] == '1'){
+    merged_dfs_test[i,'Class'] <- 3 #Male, MSI-H
+  }
+  else if (merged_dfs_test[i,'gender']=='2' & merged_dfs_test[i,'msi'] == '2'){
+    merged_dfs_test[i,'Class'] <- 4 #Male, MSS
+  }
+}
+"Train Class breakdown: 1 = Female, MSI-H, 2 =Female, MSS, 3 = Male, MSI-H, 4 = Male, MSS"
+table(merged_dfs_test$Class)
+
+# Changing the class column to a factor
+merged_dfs$Class <- as.factor(as.character(merged_dfs$Class))
+merged_dfs_test$Class <- as.factor(as.character(merged_dfs_test$Class))
+
+```
+
+### Create train/test set within merged_dfs
+```{r}
+
+set.seed(42)
+inTrain <- createDataPartition(paste(train_cli$gender, train_cli$msi), p = .8, list = FALSE)
+
+# Storing the true test set
+merged_orig_test <- merged_dfs_test
+
+merged_dfs_train <- merged_dfs[inTrain,]
+merged_dfs_test <- merged_dfs[-inTrain,]
+
+idx_train <- sample(which(merged_dfs_train$mismatch==1),5)
+merged_dfs_test  <- rbind(merged_dfs[-inTrain,], merged_dfs_train[idx_train,])
+
+
+```
+
+```{r}
+table(merged_dfs$mismatch)
+```
+
+
+Correctly labelled 68 samples class dist:
+Show in New WindowClear OutputExpand/Collapse Output
+ 1  2  3  4
+ 9 34  5 20
+
+
+80 test samples class dist:
+ 1  2  3  4
+25  6 41  8
+
+
+## 2.3.2 - Feature Selection
+### 2.3.3 - VarselRF
+[varselRF] (https://cran.r-project.org/web/packages/varSelRF/index.html)
+The varselRF feature selection approach takes advantage of both backwards feature selection for removal of redundant features as well as selection based on the variable importance spectrum for highly correlated features.
+
+Whilst the initial results from varselRF were promising, it was found after testing and re-testing that the feature selection was not consistent (as is the nature of a random forest) enough for the project team to pursue further. The code below indicates the development made by the group until a decision was made to halt on further work on this area of feature selection.
+
+It is suggested that the original high dimensionality of the data was one of the main contributing factors for the inconsistent feature selection results.
+
+### Using varSelRf to successively eliminate the least important variables in the model.
+```{r, eval=FALSE}
+i <- 1
+t <- 30
+
+feature_selections <- list()
+feature_selections<- vector("list", 3)
+
+vars <- vector("list",t)
+noofvars <- vector("list",t)
+bestoob <- vector("list",t)
+endlist <- vector("list",t)
+
+
+# Removing sampleid, class and mismatch
+data <- subset(merged_dfs, select = -c(sample,gender,msi,Class))
+
+for (i in 1:t) {
+
+  rf_features_selected <- c()
+  rf_features_selected <- varSelRF(xdata = data[,-1], Class = data$mismatch, c.sd = 1, mtryFactor = 1, ntree = 5000, ntreeIterat = 200, vars.drop.frac = 0.1,  verbose = FALSE)
+
+  vars[[i]] <- list(rf_features_selected$selected.vars)
+  noofvars[[i]] <- rf_features_selected$best.model.nvars
+  bestoob[[i]] <- min(as.double(rf_features_selected$selec.history[[3]]))
+}
+
+endlist <- list(vars = vars, num = noofvars, oob = bestoob)
+
+best_variables <- llply(endlist$vars,unlist)
+
+best_variables <- stri_join_list(llply(endlist$vars,unlist), sep = ",", collapse = NULL)
+
+fselected_data <- data.frame(vars = best_variables, noofv = as.numeric(endlist$num), oob = as.numeric(endlist$oob) )
+
+s <- summary(fselected_data$vars)
+
+kable(s, format = "html") %>%
+kable_styling(full_width = F)
+
+barplot(main ="Variable selection",prop.table(table(fselected_data$vars)),xlab="proteins", las=2)
+```
+
+[Boruta feature selection] (https://www.rdocumentation.org/packages/Boruta/versions/6.0.0/topics/Boruta)
+
+### 2.3.4 Introducing Boruta wrapper feature selection
+Similar to varselRF,The boruta algorithm is a wrapper feature selection technique and by default uses the random forest classification technique to perform a top-down search of relevant features by comparing original attributes' importance with importance achievable at random.
+
+Boruta iteratively compares importances of attributes with importances of shadow attributes, created by shuffling original ones. Attributes that have significantly worst importance than shadow ones are progressively eliminated. Attributes that are significantly better than shadows are admitted to be Confirmed. Shadows are re-created in each iteration. The Boruta algorithm stops when only Confirmed attributes are left, or when the maximum number of runs has been reached.
+
+For the purpose of this project, Boruta was found to have a consistent feature selection result across the data set. This allowed some of the later classification techniques to leverage the most important and selected features.
+
+```{r}
+# Removing sampleid, class and mismatch
+data <- subset(merged_dfs, select = -c(sample,gender,msi,Class))
+
+set.seed(42)
+boruta.train <- Boruta(x=data[,-c(1)],y= data$mismatch, doTrace = 1, maxRuns = 1000, verbose = TRUE)
+
+print(boruta.train)
+```
+
+### 2.3.5 - Looking at Boruta results
+```{r}
+boruta.results <- TentativeRoughFix(boruta.train)
+
+plot(boruta.results, xlab = "", xaxt = "n")
+k <-lapply(1:ncol(boruta.results$ImpHistory),function(i)
+  boruta.results$ImpHistory[is.finite(boruta.results$ImpHistory[,i]),i])
+names(k) <- colnames(boruta.results$ImpHistory)
+Labels <- sort(sapply(k,median))
+axis(side = 1,las=2,labels = names(Labels),
+       at = 1:ncol(boruta.results$ImpHistory), cex.axis = 0.7)
+```
+
+### 2.3.6 Extreme Gradient Boost (Feature Selection)
+Extreme Gradient Boost (XGBoost) is a method based on the paper of [Freidman J. H. (2001)](http://luthuli.cs.uiuc.edu/%7Edaf/courses/optimization/papers/2699986.pdf) for regresssion and classfication that harnesses additive modeling to achieve a flexible predictive model. Specifically, using the TreeBoost method they inherit the robust properties of trees and internal feature selection. However, unlike standard tree approaches, boosted trees have a much finer granularity that overcomes the charcteristic inaccuracy of their predecessor.
+
+We used this approach for feature selection by generating feature importance and upon inspection, decided that the top 30 features by importance were significant and selected as features.
+```{r}
+set.seed(42)
+# Define input dataframe
+
+df <- merged_dfs[which(merged_dfs$mismatch==0),]
+df.test <- merged_dfs_test
+
+# Define temporary matrices for proteomic (x) and clinical (y)
+df.pro <- data.matrix(subset(df, select= -c(sample,gender,msi,Class,mismatch)))
+df.clin <- data.matrix(subset(df, select= c(Class)))
+
+# XGBoost Train Model
+results.xgb <- xgboost(data = df.pro, label = df.clin, nrounds=1000, verbose = 0)
+# XGBoost Feature Importance
+xgb.importance <- xgb.importance(colnames(df.pro), model=results.xgb)
+
+# Plot top 30 Important Features
+xgb.plot.importance(xgb.importance[1:30])
+```
+
+
+
+## 2.4 - Class label noise and Class imbalance
+
+
+The project group applied two different approaches to mitigate class label noise in the project datasets:
+
+1) Explicit removal of observations with mislabel value of 0. In this approach the group removed all observations where the mismatch was false and by doing so the classification model was only trained on the negative labels. The intention here was to optimise the performance of the classification models to more easily distinguish between what is in fact a mislabel and what is not. This approach was used by both multi-class classification procedures.
+2) Learning with class label noise included. Rather than explicitly remove the mismatched observations from the training data, the project group used an alternate approach to include all class labels with the noise included.
+
+The objective was to leverage an established classification technique - Adaptive Sampling. This would allow the classifiers to use the noise to 'learn' and train the model to better identify future positive labels/mismatched observations. Further details of adaSampling are covered further in this report.
+
+### 2.4.1 - Create subsets of correctly-labelled/mislabelled samples
+One method of dealing with noise is to fully remove all known occurences of 'noisy' training data. The chunk below does just this, by creating an index of observations that have mismatch = 0.
+```{r}
+# Index of correctly labelled training samples
+train.label.correct.index <- which(merged_dfs$mismatch == 0)
+
+#subset correctly-labelled trian clinical/proteomic data
+merged_dfs_no_mislabels <- merged_dfs[,][train.label.correct.index,]
+```
+
+
+### 2.4.2 - Class Imbalance
+Ideally, an abundance of samples related to all possible classes would be available to assist predictive modeling. However, in reality it can be difficult and expensive to obtain even few samples of rare characteristics. Particulurly in the medical field it is often these rare samples that are most important to detect conditions in patients. In the provided dataset, there is a moderate level of class imbalance that should be addressed.
+
+Training Proteomic Data Class Distribution:
+ Classes:   1  2  3  4
+ Samples:   9 34  5 20
+
+The group tested a variety of techniques in section 2.2 and comparing 5-fold crossvalidated Kappa values across the techniques, we determined that upsampling was most appropriate in this case.
+
+### 2.4.3 Collect More Data
+The simplest apprach to tackling class imbalance is to source more data. However, in reality obtaining appropriate data is difficult without significant resources, both financial and time. Scanning freely available datasets the group discovered a dataset of 77 samples from breast cancer patients from the National Cancer Institute (https://www.kaggle.com/piotrgrabo/breastcancerproteomes), the same source of our base dataset. Inspection of the proteomic data revealed over 12000 proteins, with signficant overlap with the base dataset, so it is possible to normalize this data to supplement our base dataset.
+
+Unfortunately, the breast cancer data set does not have labels for MSI/MSS status so it will be of limited use to differentiate this attribute. Further, it is 98% females and our base dataset is already heavily skewed towards female samples. Thus, at this stage the group has decided against incorporating this additional dataset.
+
+### 2.4.5 Random Upsampling
+Up samples minority classes to match number of majority class, in this case this results in 136 correctly lablelled samples. It could be considered as a basic approach giving a balanced distribution of class samples in our case but its weaknesses include high repitition of minoority class samples.
+
+```{r, eval=FALSE}
+# 2-Class upSample on All Train Samples (80)
+# Define input dataset
+df <- merged_dfs # Use 80 correctly/mis-labelled training samples
+
+# Output Dataframe
+df.upsample <- NULL
+
+# upsample
+df.upsample <- upSample(df, factor(df$mismatch), list = FALSE)
+#Remove extra class column created by upsample function
+df.upsample <- subset(df.upsample, select=-Class)
+table(df.upsample$Class)
+```
+
+```{r}
+# 4-Class upSample on All Train Samples (80)
+# Define input dataset
+df <- merged_dfs_no_mislabels # Use 68 correctly labelled training samples only
+# df <- merged_dfs # Use 80 correctly/mis-labelled training samples
+
+# Output Dataframes for Proteomic and Clinical Data & set to NULL
+df.upsample <- NULL
+
+# upsample
+df.upsample <- upSample(df, factor(df$Class), list = FALSE)
+#Remove extra class column created by upsample function
+df.upsample <- subset(df.upsample, select=-Class)
+table(df.upsample$Class)
+```
+
+### 2.4.6 Random Downsampling
+Downsamples majority classes to match number of samples in the class with fewest samples. In the train.clin.correct dataset, this results in 20 samples (5 of each 4 classes). This method avoids generating artifical samples and may be suitable for this case of stark class imbalance. However it only uses less than one-third of available labelled samples so does not make full use of the information in the data.
+
+As per below, running LOOCV with k=4 with results in testsets of only 5 samples, this is too small to be meaningful, especially when it is leaving out the majority of the dataset. Therefore this Random Downsampling is not considered a suitable approach to class imbalance for this project.
+
+```{r, eval=FALSE}
+# 2-Class downSample on All Train Samples (80)
+# Define input dataset
+df <- merged_dfs # Use 80 correctly/mis-labelled training samples
+
+# Output Dataframe
+df.downsample <- NULL
+
+# Downsample
+df.downsample <- downSample(df, factor(df$mismatch), list = FALSE)
+#Remove extra class column created by downsample function
+df.downsample <- subset(df.downsample, select=-Class)
+table(df.downsample$Class)
+```
+
+```{r, eval=FALSE}
+# 4-Class downSample on Correct-only (68) or All Train Samples (80)
+# Define input dataset
+df <- merged_dfs_no_mislabels # Use 68 correctly labelled training samples only
+# df <- merged_dfs # Use 80 correctly/mis-labelled training samples
+
+# Output Dataframes for Proteomic and Clinical Data & set to NULL
+df.downsample <- NULL
+
+# Downsample
+df.downsample <- downSample(df, factor(df$Class), list = FALSE)
+#Remove extra class column created by downsample function
+df.downsample <- subset(df.downsample, select=-Class)
+table(df.downsample$Class)
+```
+
+### 2.4.7 Hybrid Sampling: Combining Upsampling and Downsampling (4-Class)
+The group decided to create a custom method to explore a cominbination of upsampling and downsampling in the 4-class scenario. To determine the approriate number of samples for each class, the group nominated the number of samples of the second most frequent class. This was chosen to find to avoid too much upsampling of minority classes while simultaneously minimizing the amount of information lost by downsampling the most prevalent class's samples.
+
+```{r, eval=FALSE}
+# Combining Upsampling and Downsampling for 4-Class
+# Define input dataset
+df <- merged_dfs_no_mislabels # Use 68 correctly labelled training samples only
+# df <- merged_dfs # Use 80 correctly/mis-labelled training samples
+
+# Output Dataframes for Proteomic and Clinical Data & set to NULL
+hybrid.sample.pro <- NULL
+hybrid.sample.clin <- NULL
+df.hybrid <- NULL
+
+# Get all unique classes
+class.list <- unique(df$Class)
+
+# Get count of each class
+class.count <- c()
+for(class in class.list){
+  class.count[class] <- sum(df$Class == class)
+}
+
+# Samples data so that samples for each class = sample count of second most frequent class
+class.sample <- sort(class.count)[[length(class.count)-1]]
+class.sample.name <- as.numeric(names(sort(class.count)[length(class.count)-1]))
+
+# Check if class.count for each class is < or > class.sample and upsample/downsample accordingly
+for(class in class.list){
+  df.pro <- NULL
+  df.clin <- NULL
+  if (class.count[[class]] > class.sample){ # If Class has MORE samples than second most frequent class
+    temp.singleClass.df <- which(df$Class == class)
+    temp.singleClass.df <- c(temp.singleClass.df,which(df$Class == class.sample.name))
+
+    df.pro <- subset(df, select= -c(sample,gender,msi,Class,mismatch))[temp.singleClass.df,]
+    df.clin <- subset(df, select= c(sample,gender,msi,Class,mismatch))[temp.singleClass.df,]
+    # downSample(x, y, list = FALSE, yname = "Class")
+    temp.pro.downsamp <- downSample(df.pro, factor(df.clin$Class, levels=unique(df.clin$Class)), list = FALSE, yname = "Class")
+    temp.clin.downsamp <- downSample(df.clin, factor(df.clin$Class, levels=unique(df.clin$Class)), list = FALSE, yname = "Class")
+    # Remove extra "Class" column appended by downSample function
+    temp.pro.downsamp <- subset(temp.pro.downsamp, select=-Class)
+    temp.clin.downsamp <- subset(temp.clin.downsamp, select=-Class)
+    temp.clin.downsamp.class <- which(temp.clin.downsamp$Class == class)
+    temp.pro.downsamp.singleclass <- temp.pro.downsamp[temp.clin.downsamp.class,]
+    temp.clin.downsamp.singleclass <- temp.clin.downsamp[temp.clin.downsamp.class,]
+    if (exists("hybrid.sample.pro") == FALSE){
+      hybrid.sample.pro <- temp.pro.downsamp.singleclass
+      hybrid.sample.clin <- temp.clin.downsamp.singleclass
+    } else if (exists("hybrid.sample.pro") == TRUE){
+      hybrid.sample.pro <- rbind(hybrid.sample.pro,temp.pro.downsamp.singleclass)
+      hybrid.sample.clin <- rbind(hybrid.sample.clin,temp.clin.downsamp.singleclass)
+    }
+  } else if(class.count[[class]] < class.sample){ # If Class has LESS samples than second most frequent class
+    temp.singleClass.df <- which(df$Class == class)
+    temp.singleClass.df <- c(temp.singleClass.df,which(df$Class == class.sample.name))
+    df.pro <- subset(df, select= -c(sample,gender,msi,Class,mismatch))[temp.singleClass.df,]
+    df.clin <- subset(df, select= c(sample,gender,msi,Class,mismatch))[temp.singleClass.df,]
+    # upsample(x, y, list = FALSE, yname = "Class")
+    temp.pro.upsamp <- upSample(df.pro, factor(df.clin$Class, levels=unique(df.clin$Class)), list = FALSE, yname = "Class")
+    temp.clin.upsamp <- upSample(df.clin, factor(df.clin$Class, levels=unique(df.clin$Class)), list = FALSE, yname = "Class")
+    # Remove extra "Class" column appended by downSample function
+    temp.pro.upsamp <- subset(temp.pro.upsamp, select=-Class)
+    temp.clin.upsamp <- subset(temp.clin.upsamp, select=-Class)
+    temp.clin.upsamp.class <- which(temp.clin.upsamp$Class == class)
+    temp.pro.upsamp.singleclass <- temp.pro.upsamp[temp.clin.upsamp.class,]
+    temp.clin.upsamp.singleclass <- temp.clin.upsamp[temp.clin.upsamp.class,]
+    if (exists("hybrid.sample.pro") == FALSE){
+      hybrid.sample.pro <- temp.pro.upsamp.singleclass
+      hybrid.sample.clin <- temp.clin.upsamp.singleclass
+    } else if (exists("hybrid.sample.pro") == TRUE){
+      hybrid.sample.pro <- rbind(hybrid.sample.pro,temp.pro.upsamp.singleclass)
+      hybrid.sample.clin <- rbind(hybrid.sample.clin,temp.clin.upsamp.singleclass)
+  }
+  } else { # Just add samples of 2nd largest class unaltered
+      temp.sample.class.df <- which(df$Class == class.sample.name)
+      df.pro <- subset(df, select= -c(sample,gender,msi,Class,mismatch))[temp.sample.class.df,]
+      df.clin <- subset(df, select= c(sample,gender,msi,Class,mismatch))[temp.sample.class.df,]
+      if (exists("hybrid.sample.pro") == FALSE){
+      hybrid.sample.pro <- df.pro
+      hybrid.sample.clin <- df.clin
+    } else if (exists("hybrid.sample.pro") == TRUE){
+      hybrid.sample.pro <- rbind(hybrid.sample.pro,df.pro)
+      hybrid.sample.clin <- rbind(hybrid.sample.clin,df.clin)
+  }
+  }
+}
+
+df.hybrid <- cbind(hybrid.sample.clin,hybrid.sample.pro)
+# Output Dataframes:
+# hybrid.sample.pro
+# hybrid.sample.clin
+# df.hybrid
+
+#Print class counts of output DF
+print(table(df.hybrid$Class))
+```
+
+### 2.4.8 Hybrid Sampling: Synthetic Minority Over-sampling Technique (SMOTE)
+SMOTE [Chawla et. al. 2002](https://arxiv.org/pdf/1106.1813.pdf) represents an alternative hybrind sampling approach that artificially generate synthetic samples of the minority class using the nearest neighbors to overcome class imbalance.
+
+While the synthetic samples are generally a welcome addition, in this case where the group does not understand the subtle inter-relationship of the features. There was concern that synthetic samples may misrepresent the intra-feature space relationships in this case with few samples so we were reluctant to adopt this approach.
+
+```{r, eval=FALSE}
+# 2-Class SMOTE on All Train Samples (80)
+# Define input dataset
+df <- merged_dfs # Use 80 correctly/mis-labelled training samples
+
+# Output dataframe
+df.smote <- NULL
+
+# df.pro <- subset(df, select= -c(sample,gender,msi,Class,mismatch))
+smote.temp <- ubSMOTE(df, factor(df$mismatch), perc.over = 500, k=3,perc.under =300)
+df.smote <- smote.temp$X
+
+table(df.smote$mismatch)
+```
+
+```{r, eval=FALSE}
+# SMOTE 4-Class: Generate extra class1 and class3 samples using SMOTE
+# https://www.rdocumentation.org/packages/DMwR/versions/0.4.1/topics/SMOTE
+# NB: df.smote output is proteomic data + class only
+
+# Define input dataset
+df <- merged_dfs_no_mislabels # Use 68 correctly labelled training samples only
+# df <- merged_dfs # Use 80 correctly/mis-labelled training samples
+
+# Output Dataframes for Proteomic and Clinical Data & set to NULL
+smote.sample.pro <- NULL
+smote.sample.clin <- NULL
+df.smote <- NULL
+
+# Create index of Class 1 and Class 2 samples only
+index_1and2_class <- which(df$Class ==1)
+index_1and2_class <- c(index_1and2_class,which(df$Class ==2))
+
+# Create df of Class 2 and Class 1 samples only based on index
+df.temp1 <- subset(df)[index_1and2_class,]
+
+# Run SMOTE to generate synthetic samples based on Class3 samples
+smote.1 <- ubSMOTE(df.temp1, factor(df.temp1$Class, levels=unique(df.temp1$Class)), perc.over = 200, k=3, perc.under =200)
+# table(smote.1$Y)
+index_class1 <- which(smote.1$Y ==1)
+df.smote.1 <- cbind(smote.1$Y[index_class1],smote.1$X[index_class1,])
+
+########
+
+# Create index of Class 2 and Class 3 samples only
+index_3and2_class <- which(df$Class ==4)
+index_3and2_class <- c(index_3and2_class,which(df$Class ==2))
+
+# Create df of Class 2 and Class 3 samples only based on index
+df.temp3 <- subset(df)[index_3and2_class,]
+
+# Run SMOTE to generate synthetic samples based on Class3 samples
+smote.3 <- ubSMOTE(df.temp3, factor(df.temp3$Class, levels=unique(df.temp3$Class)), perc.over = 200, k=3, perc.under =200)
+
+index_class3 <- which(smote.3$Y ==3)
+df.smote.3 <- cbind(smote.3$Y[index_class3],smote.3$X[index_class3,])
+
+#Add Smote'd samples to original correctly labeled dataset
+df.smote <- rbind(df,df.smote.1[,-1],df.smote.3[,-1])
+
+table(df.smote$Class)
+```
+
+### 2.4.9 Weighted Sampling
+This approach maintains the original number of samples but imposes a heavier cost when errors are made in the minority classes. The below implementation uses the inverse of the ratio of a given classes number of samples in to total samples (total no. of samples/no. of samples of class x) to determine the respective class weights to counteract the class imbalance.
+
+```{r, eval=FALSE}
+# 2Class Class Weighting
+# randomForest argument classwt = c(class1_weight,class2_weight) defines class weights
+set.seed(42)
+trees = 1000
+# Define input dataset
+df <- merged_dfs # Use 80 correctly/mis-labelled training samples
+
+# create 5 folds (stratified) to ensure one sample of each class is included
+train.clin.fold <- createFolds(factor(df$mismatch), k = 5, list = TRUE, returnTrain = FALSE)
+for(fold in train.clin.fold){
+  pro.cv <- subset(df, select= -c(sample,gender,msi,Class,mismatch))
+
+  pro.cv.test <- pro.cv[fold,]
+  clin.cv.test <- df$mismatch[fold]
+
+  pro.cv.train <- pro.cv[-fold,]
+  clin.cv.train <- df$mismatch[-fold]
+
+  model_rf <- randomForest(x=pro.cv.train, y=factor(clin.cv.train, levels=c(1,2,3,4)), xtest=pro.cv.test, ytest=factor(clin.cv.test, levels=c(1,2,3,4)), ntree=trees, mtry=64, classwt = c(1,6), importance = FALSE)
+
+  # print(confusionMatrix(factor(clin.cv.test),model_rf$test$predicted))  
+}
+# print(confusionMatrix(factor(clin.cv.test),model_rf$test$predicted))
+model_rf
+```
+
+```{r, eval=FALSE}
+# 4Class Class Weighting
+set.seed(42)
+trees = 1000
+# Define input dataset
+df <- merged_dfs_no_mislabels # Use 68 correctly labelled training samples only
+# df <- merged_dfs # Use 80 correctly/mis-labelled training samples
+
+# Get all unique classes
+class.list <- unique(df$Class)
+
+# Get count of each class
+class.count <- c()
+for(class in class.list){
+  class.count[class] <- sum(df$Class == class)
+}
+# Get total number of samples
+samples = length(merged_dfs$Class)
+
+# Define class weights with total no. of samples/number of class samples
+class_weights = c(samples/class.count[[1]],samples/class.count[[2]],samples/class.count[[3]],samples/class.count[[4]])
+class_weights
+
+# create 5 folds (stratified) to ensure one sample of each class is included
+train.clin.fold <- createFolds(factor(df$Class), k = 5, list = TRUE, returnTrain = FALSE)
+for(fold in train.clin.fold){
+  pro.cv <- subset(df, select= -c(sample,gender,msi,Class,mismatch))
+
+  pro.cv.test <- pro.cv[fold,]
+  clin.cv.test <- df$Class[fold]
+
+  pro.cv.train <- pro.cv[-fold,]
+  clin.cv.train <- df$Class[-fold]
+
+  # Benchmark RF Model
+  # model_rf <- randomForest(x=pro.cv.train, y=factor(clin.cv.train), xtest=pro.cv.test, ytest=factor(clin.cv.test), ntree=trees, mtry=64, importance = FALSE)
+    model_rf <- randomForest(x=pro.cv.train, y=factor(clin.cv.train), xtest=pro.cv.test, ytest=factor(clin.cv.test), ntree=trees, mtry=64, classwt = class_weights, importance = FALSE)
+
+  print(confusionMatrix(factor(clin.cv.test),model_rf$test$predicted))
+}
+# print(confusionMatrix(factor(clin.cv.test),model_rf$test$predicted))
+```
+
+### 2.4.10 Benchmarking Class Imbalance Correction Methods with RF
+```{r}
+# Benchmark Class Imbalance RF
+set.seed(42)
+trees = 1000
+
+# COMMENT OUT ALL BUT ONE TO TEST:
+# 4-CLASS
+# df <- merged_dfs_no_mislabels 5-fold CV Kappa:sum(0.1683,0.1683, -0.0833, 0, 0.0215)/5=0.05496
+# df <- df.downsample # Downsampling 5-fold CV Kappa:sum(0,0.6667, -0.3333, 0, 0)/5=0.06668
+df <- df.upsample # Upsampling class 5-fold CV Kappa:sum(0.8095,0.8015, 0.8972, 0.9015, 0.9048)/5=0.8629
+# df <- df.hybrid # Hybrid Sampling 5-fold CV Kappa:sum(0.8333,0.5, 0.6667, 0.75, 0.6667)/5=0.68334
+# Class weights on merged_dfs_no_mislabels: 5-fold CV Kappa:sum(0,0.1845, -0.1235, 0.1683, 0.1683)/5=0.07952
+# Class weights on df.upsample : 5-fold CV Kappa:sum(0.8095,0.8514,0.7431, 0.8519,0.8095)/5=0.81308
+
+# create 5 folds (stratified) to ensure one sample of each class is included
+train.clin.fold <- createFolds(factor(df$Class), k = 5, list = TRUE, returnTrain = FALSE)
+for(fold in train.clin.fold){
+  pro.cv <- subset(df, select= -c(sample,gender,msi,Class,mismatch))
+
+  pro.cv.test <- pro.cv[fold,]
+  clin.cv.test <- df$Class[fold]
+
+  pro.cv.train <- pro.cv[-fold,]
+  clin.cv.train <- df$Class[-fold]
+
+  # BENCHMARK RF MODEL
+  model_rf <- randomForest(x=pro.cv.train, y=factor(clin.cv.train), ntree=trees, mtry=64, importance = FALSE)
+}
+
+```
+
+
+# 3 - Classification procedures
+## 3.1 - Classification procedure 1 -  Using AdaSampling to learn with class label noise.
+
+Below the Adaptive Sampling approach is used to train a binary classification support vector machine (SVM) model to learn with included class label noise on the training dataset.
+
+Figure 2 below illustrates that by combining training data with noise, and then by sampling instances from the training we can attempt to train a classificatiopn model that is over a number of iterations able to adjust the probability of an instance being mislabelled as either negative + or -. The adaSample function allows a variety of classification models to be applied, however, SVM was found to be in this case the most performant.
+
+The group chose also to run the SVM method as an ensemble (with a value of c=200). This allows us to combine 1:200 models to improve the performance of the model over time.
+
+![Figure 2: AdaSampling process flow](adaSampling_Image.JPG)
+
+```{r}
+# Obtaining features from Boruta results
+features_boruta <- c(getSelectedAttributes(boruta.train))
+features <- c("mismatch",features_boruta)
+
+# Removing sampleid, class and mismatch from input data set
+data = merged_dfs[,names(merged_dfs) %in% features]
+data_test = merged_dfs[,names(merged_dfs) %in% features]
+
+# Creating the folds to cycle through
+k <- 10
+
+# Setting the seed for reproduceability and blanking out other vectors for re-use
+set.seed(42)
+fold <- createFolds(data$mismatch, k)
+
+truth <- data[,"mismatch"]
+pred.prob <- c()
+total.probs <- c()
+cls <- c()
+Ps <- Ns <- c()
+accuracy <- accuracies <- precision <- recall <- precisions <- recalls <- f1 <- f1s <-  c()
+
+TP <- TN <- FP <- FN <- c()
+
+for (i in 1:length(fold)) {
+  train.mat <- data[-fold[[i]],]
+  test.mat <- data[fold[[i]],]
+  cls <- truth[-fold[[i]]]
+
+  # index positive and negative instances
+  Ps <- rownames(train.mat)[which(cls == 1)]
+  Ns <- rownames(train.mat)[which(cls == 0)]
+
+  pred.prob <- adaSample(Ps, Ns, train.mat[,-c(1)], test.mat[,-c(1)], classifier="svm", C=200)
+
+  pred <- ifelse(pred.prob[,"P"] > 0.6, 1, 0)
+
+  total.probs <- data.frame(rbind(total.probs,pred.prob))
+
+  TP <- c(TP, sum((truth[fold[[i]]] == pred)[truth[fold[[i]]] == "1"]))
+  TN <- c(TN, sum((truth[fold[[i]]] == pred)[truth[fold[[i]]] == "0"]))
+  FP <- c(FP, sum((truth[fold[[i]]] != pred)[pred == "1"]))
+  FN <- c(FN, sum((truth[fold[[i]]] != pred)[pred == "0"]))
+
+  accuracy <- (TP+TN)/(TP+TN+FP+FN)
+  precision <- (TP)/(TP+FP)
+  recall <- (TP)/(TP+FN)
+  accuracy <- (TP+TN)/(TP+TN+FP+FN)
+  f1 <- (2 * precision[i] * recall[i])/ (precision[i] + recall[i])
+
+  accuracies <- c(accuracies, accuracy[i])
+  precisions <- c(precisions, precision[i])
+  recalls <- c(recalls, recall[i])
+  f1s <- c(f1s,f1[i])
+
+}
+
+"accuracies"
+accuracies
+
+"mean accuracy"
+mean(accuracies)
+
+"mean f1 scores"
+mean(f1s)
+
+total.probs$class <- ifelse(total.probs[,"P"] > 0.6, 1, 0)
+
+# Converting predicted class label to a factor to allow a confusion matrix to be created
+total.probs$class <- as.factor(total.probs$class)
+
+table(total.probs$class)
+
+confusionMatrix(data =total.probs$class,reference = truth, positive = "1" )
+
+datatable(total.probs)
+```
+## 3.2 - Setting up bagged One-VS-ALL Support Vector Machine model
+
+```{r}
+
+set.seed(42)
+match_data <- merged_dfs[which(merged_dfs[,"mismatch"]==0), ]
+#match_data$Class <- as.factor(match_data$Class)
+
+# The feature selection is based on the results of XGboost and Al's reasearch.
+feature <- c("sample","gender","msi","Class", "mismatch", "SRPK1", "TACC2", "METTL13", "VPS35", "MRPL9", "COL6A1",  "LCP1", "FLNC","TP53BP1", "ACSL4", "DNAJB11", "CUL4A", "ITIH2", "MAPK3", "IDH3G", "COL1A1","ABCF2", "AGRN", "CDIPT", "PGM2", "UBE2L6", "ACADVL","AACS", "ADRM1", "WARS", "PSMA5", "U2AF1L5", "LGALS1","ACTR2","ABCC1"  )
+
+data <- merged_dfs_train[,names(merged_dfs_train) %in% feature]
+train_data <- match_data[,names(match_data) %in% feature]
+test_data <- merged_dfs_test[,names(merged_dfs_test) %in% feature]
+```
+
+### 3.2.1 Bagging One-VS-All Support Vector Machine model
+In this section, we create a bagging one-vs-all support vector machine (SVM) model.
+
+First, we solve the class imbalance problems by using a balanced data sampling approach. The data sampling function is used to produce 4 large data lists for 4 classes, and every large list contains 20 small data lists. For every small list of "female msi" class, it has 9 instances from "female msi" class and 9 instances are randomly selected from other 3 classes. We assign "female msi" class a new label "1", and other samples as "0". Similarly, every small list of "female mss" class has 34 "female mss" instances as "1" and 34 instances from other 3 classes as "0". Every small list of "male msi" class has 7 "male msi" instances as "1" and 8 instances from other 3 classes as "0". Every small list of "male mss" class has 20 "male mss" instances as "1" and 20 instances from other 3 classes as "0".
+
+```{r}
+# Create a function to do data sampling for train data which are used to train models and solve the class imbalance problem.
+dataSampling <- function(data, n){
+  # n: the number of samples
+  # Create the data bag to store the sample data of each class
+  sample_female_msi <- sample_female_mss <- sample_male_msi <- sample_male_mss <- c()
+
+  # Create list for storing the sample index
+  index_female_msi <- list()#The number of female_msi samples are 6, it cannot run svm, we will sample this class with replace.
+  index_male_msi <- list() #The number of male_msi samples are 4, it cannot run svm, we will sample this class with replace.
+  sample_except_female_msi <- list()
+  sample_except_female_mss <- list()
+  sample_except_male_msi <- list()
+  sample_except_male_mss <- list()
+
+  #########################################################################################
+
+  # Data sampling for female_msi class. For every list of sample_female_msi, the label of female_msi data is 1, and the label of other data is 0.
+  # The number of samples in every list is 6 + 2 + 6 + 2 = 16.
+  labeled.female_msi <- data[data$Class == '1', ]%>%
+    mutate(newClass = as.factor('1'))
+  labeled.except_female_msi <- data[data$Class != '1', ]%>%
+    mutate(newClass = as.factor('0'))
+
+  for (i in 1:n) {
+    index_female_msi[[i]] <- sample(x = 1:nrow(labeled.female_msi),
+                                           size = nrow(labeled.female_msi)+2,
+                                           replace = TRUE)
+    sample_except_female_msi[[i]] <- sample(x = 1:nrow(labeled.except_female_msi),
+                                           size = nrow(labeled.female_msi)+2,
+                                           replace = FALSE)
+    sample_female_msi[[i]] <- rbind(labeled.female_msi[index_female_msi[[i]], ],
+                                    labeled.except_female_msi[sample_except_female_msi[[i]], ])
+  }
+
+  #########################################################################################
+
+  # Data sampling for female_mss class. For every list of sample_female_msi, the label of female_mss data is 1, and the label of other data is 0.
+  # The number of samples in every list is 29 + 29 = 58.
+  labeled.female_mss <- data[data$Class == '2', ]%>%
+    mutate(newClass = as.factor('1'))
+  labeled.except_female_mss <- data[data$Class != '2', ]%>%
+    mutate(newClass = as.factor('0'))
+
+  for (i in 1:n) {
+    sample_except_female_mss[[i]] <- sample(x = 1:nrow(labeled.except_female_mss),
+                                           size = nrow(labeled.female_mss),
+                                           replace = TRUE)
+    # Because the total number of match data is 68, we will sample the data except female_mss with replace.
+    sample_female_mss[[i]] <- rbind(labeled.female_mss,
+                                    labeled.except_female_mss[sample_except_female_mss[[i]], ])
+  }
+
+  #######################################################################################
+
+  # Data sampling for male_msi class. For every list of sample_female_msi, the label of male_msi data is 1, and the label of other data is 0.
+  # The number of samples in every list is 4 + 3 + 4 + 4 = 15.
+  # The number of samples should more than 10 when running SVM model, since the one vs all SVM model is using 4 fold to train and tune, we need 15 samples for this class.
+  labeled.male_msi <- data[data$Class == '3', ]%>%
+    mutate(newClass = as.factor('1'))
+  labeled.except_male_msi <- data[data$Class != '3', ]%>%
+    mutate(newClass = as.factor('0'))
+
+  for (i in 1:n) {
+    index_male_msi[[i]] <- sample(x = 1:nrow(labeled.male_msi),
+                                           size = nrow(labeled.male_msi)+3,
+                                           replace = TRUE)
+    sample_except_male_msi[[i]] <- sample(x = 1:nrow(labeled.except_male_msi),
+                                           size = nrow(labeled.male_msi)+4,
+                                           replace = FALSE)
+    sample_male_msi[[i]] <- rbind(labeled.male_msi[index_male_msi[[i]], ],
+                                    labeled.except_male_msi[sample_except_male_msi[[i]], ])
+  }
+
+  ########################################################################################
+
+  # Data sampling for male_mss class. For every list of sample_female_msi, the label of male_mss data is 1, and the label of other data is 0.
+  # The number of samples in every list is 16 + 16 = 32.
+  labeled.male_mss <- data[data$Class == '4', ]%>%
+    mutate(newClass = as.factor('1'))
+  labeled.except_male_mss <- data[data$Class != '4', ]%>%
+    mutate(newClass = as.factor('0'))
+
+  for (i in 1:n) {
+    sample_except_male_mss[[i]] <- sample(x = 1:nrow(labeled.except_male_mss),
+                                           size = nrow(labeled.male_mss),
+                                           replace = FALSE)
+    sample_male_mss[[i]] <- rbind(labeled.male_mss,
+                                    labeled.except_male_mss[sample_except_male_mss[[i]], ])
+
+    #######################################################################################
+
+    #return the 4 data samples.
+    assign("sample_female_msi", sample_female_msi, envir = globalenv())
+    assign("sample_female_mss", sample_female_mss, envir = globalenv())
+    assign("sample_male_msi", sample_male_msi, envir = globalenv())
+    assign("sample_male_mss", sample_male_mss, envir = globalenv())
+  }
+}
+```
+
+### 3.2.2 Creating 4 lists of 20 samples
+```{r}
+set.seed(42)
+# Every class has 20 list of samples.
+dataSampling(train_data, 20)
+```
+
+Secondly, we create a function to get the probability of input data. The "ovaSVM" function includes three parts: training models, testing models and predict results. For the piece of training and testing models, we apply 4 folds cross validation, 3 folds of data are used to tune parameters and then train base svm models, 1 fold of data is used to test the performance of base svm model. Based on the perofrmance of testing, we assign higher weights to better classifiers and less weight to weak classifiers. Next, we use these classifiers to predict the probability of every input data predicted as each class.
+```{r}
+# Create a function for one vs all SVM model, use match data to train model and tune parameters, and use the model to predict test samples.
+ovaSVM <- function(data, k, n, gamma, cost){
+  # data: input data.
+  # k: the number of fold
+  # n:the number of data samples
+  # gamma: SVM model's parameter
+  # cost: SVM model's parameter
+
+  # Create a list to store the prediction results(the probability of each test sample belong to each class, and every svm base model information.)
+  ovaSVM.results <- list()
+  # Create a list to store the basic models which have the best parameters after tuning.
+  svm.basemodel <- list()
+  # Create a list to store the predict result of using base model and train data.
+  ovaSVM.predict <- list()
+  # Create a list to store the probability of correct prediction results.
+  ovaSVM.prob <- c()
+  svm.sum.prob <- 0
+  fold <- list()
+
+  # Tune and train the SVM model for female_msi class.
+  for (i in 1:n) {
+
+    sample <- subset(sample_female_msi[[i]], select=-c(sample,gender,msi,Class,mismatch))
+    # Get the column index of newClass
+    q <- which(colnames(sample) == "newClass")
+    fold <- createFolds(sample$newClass, k)
+    # Use k-1 folds to tune the parameters for SVM
+
+    svm.cv <- tune.svm(x = sample[-fold$Fold1, -q],
+                       y = sample[-fold$Fold1, q],
+                       kernel = "radial",
+                       gamma = gamma,
+                       cost = cost)
+    # Get the base SVM model with best parameters.
+    svm.basemodel[[i]] <- svm(x = sample[-fold$Fold1, -q],
+                              y = sample[-fold$Fold1, q],
+                              kernel = "radial",
+                              gamma = svm.cv$best.parameters$gamma,
+                              cost = svm.cv$best.parameters$cost,
+                              probability = TRUE)
+    # In the testing part, we focus on the performance of predicting "1".
+    # d: the index of samples which are in female_msi class in Fold1.
+    d <- which(sample[fold$Fold1, q] == "1")
+    # Get the probability results of d samples.
+    ovaSVM.predict[[i]] <- predict(svm.basemodel[[i]], sample[fold$Fold1, -q][d,],
+                                       decision.values = TRUE, probability = TRUE)
+    # Use mean of the probability to represent the performance of the [[i]] SVM model.
+    ovaSVM.prob[i] <- mean(attr(ovaSVM.predict[[i]], "probabilities")[,"1"])
+  }
+
+
+    # Use the train models to predict the input data.
+    for (j in 1:n) {
+      if("mismatch" %in% colnames(data)){
+      ovaSVM.predict <- predict(svm.basemodel[[j]],subset(data, select=-c(sample,gender,msi,Class,mismatch)), decision.values = TRUE, probability = TRUE)}
+      else{
+        ovaSVM.predict <- predict(svm.basemodel[[j]],subset(data, select=-c(sample,gender,msi,Class)), decision.values = TRUE, probability = TRUE)}
+      # Sum the probability of every input data predicted as female_msi class.
+      svm.sum.prob <- svm.sum.prob + attr(ovaSVM.predict, "probabilities")[,"1"] / ovaSVM.prob[j]
+    }
+    # Use mean of the probability to represent the probability result for every input data.
+    # Scale the probability of predition result to the range of 0~1.
+    ovaSVM.results$female_msi.prediction <- (svm.sum.prob / n) / max(svm.sum.prob / n)
+    # Save every svm model imformation in ovaSVM.results.
+    ovaSVM.results$female_msi.svm <- svm.basemodel
+    # Combine the probability results with input data.
+    ovaSVM.alldata <- cbind(data,
+                            female_msi.prob = round(ovaSVM.results$female_msi.prediction, digits = 4))
+
+##########################################################################################################
+
+  # Create a list to store the basic models which have the best parameters after tuning.
+  svm.basemodel <- list()
+  # Create a list to store the predict result of using base model and train data.
+  ovaSVM.predict <- list()
+  # Create a list to store the probability of correct prediction results.
+  ovaSVM.prob <- c()
+  svm.sum.prob <- 0
+  fold <- list()
+
+  for (i in 1:n) {
+    sample <- subset(sample_female_mss[[i]], select=-c(sample,gender,msi,Class,mismatch))
+    # Get the column index of newClass
+    q <- which(colnames(sample) == "newClass")
+    fold <- createFolds(sample$newClass, k)
+    # Use k-1 folds to tune the parameters for SVM
+    svm.cv <- tune.svm(x = sample[-fold$Fold1, -q],
+                       y = sample[-fold$Fold1, q],
+                       kernel = "radial",
+                       gamma = gamma,
+                       cost = cost)
+    # Get the base SVM model with best parameters.
+    svm.basemodel[[i]] <- svm(x = sample[-fold$Fold1, -q],
+                              y = sample[-fold$Fold1, q],
+                              kernel = "radial",
+                              gamma = svm.cv$best.parameters$gamma,
+                              cost = svm.cv$best.parameters$cost,
+                              probability = TRUE)
+    # In the testing part, we focus on the performance of predicting "1".
+    # d: the index of samples which are in female_mss class in Fold1.
+    d <- which(sample[fold$Fold1, q] == "1")
+    # Get the probability results of d samples.
+    ovaSVM.predict[[i]] <- predict(svm.basemodel[[i]], sample[fold$Fold1, -q][d,],
+                                       decision.values = TRUE, probability = TRUE)
+    # Use mean of the probability to represent the performance of the [[i]] SVM model.
+    ovaSVM.prob[i] <- mean(attr(ovaSVM.predict[[i]], "probabilities")[,1])
+  }
+
+    # Use the train models to predict the input data.
+    for (j in 1:n) {
+      if("mismatch" %in% colnames(data)){
+      ovaSVM.predict <- predict(svm.basemodel[[j]],subset(data, select=-c(sample,gender,msi,Class,mismatch)), decision.values = TRUE, probability = TRUE)}
+      else{
+        ovaSVM.predict <- predict(svm.basemodel[[j]],subset(data, select=-c(sample,gender,msi,Class)), decision.values = TRUE, probability = TRUE)}
+      # Sum the probability of every input data predicted as female_mss class.
+      svm.sum.prob <- svm.sum.prob + attr(ovaSVM.predict, "probabilities")[,"1"] / ovaSVM.prob[j]
+    }
+     # Use mean of the probability to represent the probability result for every input data.
+     # Scale the probability of predition result to the range of 0~1.
+    ovaSVM.results$female_mss.prediction <- (svm.sum.prob / n) / max(svm.sum.prob / n)
+    # Save every svm model imformation in ovaSVM.results.
+    ovaSVM.results$female_mss.svm <- svm.basemodel
+    # Combine the probability results with input data.
+    ovaSVM.alldata <- cbind(ovaSVM.alldata,
+                            female_mss.prob = round(ovaSVM.results$female_mss.prediction, digits = 4))
+
+#########################################################################################################
+
+  # Create a list to store the basic models which have the best parameters after tuning.
+  svm.basemodel <- list()
+  # Create a list to store the predict result of using base model and train data.
+  ovaSVM.predict <- list()
+  # Create a list to store the probability of correct prediction results.
+  ovaSVM.prob <- c()
+  svm.sum.prob <- 0
+  fold <- list()
+
+  for (i in 1:n) {
+    sample <- subset(sample_male_msi[[i]], select=-c(sample,gender,msi,Class,mismatch))
+    # Get the column index of newClass
+    q <- which(colnames(sample) == "newClass")
+    fold <- createFolds(sample$newClass, k)
+    # Use k-1 folds to tune the parameters for SVM
+    svm.cv <- tune.svm(x = sample[-fold$Fold1, -q],
+                       y = sample[-fold$Fold1, q],
+                       kernel = "radial",
+                       gamma = gamma,
+                       cost = cost)
+    # Get the base SVM model with best parameters.
+    svm.basemodel[[i]] <- svm(x = sample[-fold$Fold1, -q],
+                              y = sample[-fold$Fold1, q],
+                              kernel = "radial",
+                              gamma = svm.cv$best.parameters$gamma,
+                              cost = svm.cv$best.parameters$cost,
+                              probability = TRUE)
+    # In the testing part, we focus on the performance of predicting "1".
+    # d: the index of samples which are in male_msi class in Fold1.
+    d <- which(sample[fold$Fold1, q] == "1")
+     # Get the probability results of d samples.
+    ovaSVM.predict[[i]] <- predict(svm.basemodel[[i]], sample[fold$Fold1, -q][d,],
+                                       decision.values = TRUE, probability = TRUE)
+    # Use mean of the probability to represent the performance of the [[i]] SVM model.
+    ovaSVM.prob[i] <- mean(attr(ovaSVM.predict[[i]], "probabilities")[,1])
+  }
+
+
+    # Use the train models to predict the input data.
+    for (j in 1:n) {
+       if("mismatch" %in% colnames(data)){
+      ovaSVM.predict <- predict(svm.basemodel[[j]],subset(data, select=-c(sample,gender,msi,Class,mismatch)), decision.values = TRUE, probability = TRUE)}
+      else{
+        ovaSVM.predict <- predict(svm.basemodel[[j]],subset(data, select=-c(sample,gender,msi,Class)), decision.values = TRUE, probability = TRUE)}
+      # Sum the probability of every input data predicted as male_msi class.
+      svm.sum.prob <- svm.sum.prob + attr(ovaSVM.predict, "probabilities")[,"1"] / ovaSVM.prob[j]
+    }
+    # Use mean of the probability to represent the probability result for every input data.
+    # Scale the probability of predition result to the range of 0~1.
+    ovaSVM.results$male_msi.prediction <- (svm.sum.prob / n) / max(svm.sum.prob / n)
+    # Save every svm model imformation in ovaSVM.results.
+    ovaSVM.results$male_msi.svm <- svm.basemodel
+    # Combine the probability results with input data.
+    ovaSVM.alldata <- cbind(ovaSVM.alldata,
+                                male_msi.prob = round(ovaSVM.results$male_msi.prediction, digits = 4))
+
+##########################################################################################################
+
+  # Create a list to store the basic models which have the best parameters after tuning.
+  svm.basemodel <- list()
+  # Create a list to store the predict result of using base model and train data.
+  ovaSVM.predict <- list()
+  # Create a list to store the probability of correct prediction results.
+  ovaSVM.prob <- c()
+  svm.sum.prob <- 0
+  fold <- list()
+
+  for (i in 1:n) {
+     sample <- subset(sample_male_mss[[i]], select=-c(sample,gender,msi,Class,mismatch))
+    # Get the column index of newClass
+    q <- which(colnames(sample) == "newClass")
+    # Use k-1 folds to tune the parameters for SVM
+    fold <- createFolds(sample$newClass, k)
+    # Get the base SVM model with best parameters.
+    svm.cv <- tune.svm(x = sample[-fold$Fold1, -q],
+                       y = sample[-fold$Fold1, q],
+                       kernel = "radial",
+                       gamma = gamma,
+                       cost = cost)
+    # Get the base SVM model with best parameters.
+    svm.basemodel[[i]] <- svm(x = sample[-fold$Fold1, -q],
+                              y = sample[-fold$Fold1, q],
+                              kernel = "radial",
+                              gamma = svm.cv$best.parameters$gamma,
+                              cost = svm.cv$best.parameters$cost,
+                              probability = TRUE)
+    # In the testing part, we focus on the performance of predicting "1".
+    # d: the index of samples which are in male_mss class in Fold1.
+    d <- which(sample[fold$Fold1, q] == "1")
+    # Get the probability results of d samples.
+    ovaSVM.predict[[i]] <- predict(svm.basemodel[[i]], sample[fold$Fold1, -q][d,],
+                                       decision.values = TRUE, probability = TRUE)
+    # Use mean of the probability to represent the performance of the [[i]] SVM model.
+    ovaSVM.prob[i] <- mean(attr(ovaSVM.predict[[i]], "probabilities")[,1])
+  }
+
+
+    # Use the train models to predict the input data.
+    for (j in 1:n) {
+     if("mismatch" %in% colnames(data)){
+      ovaSVM.predict <- predict(svm.basemodel[[j]],subset(data, select=-c(sample,gender,msi,Class,mismatch)), decision.values = TRUE, probability = TRUE)}
+      else{
+        ovaSVM.predict <- predict(svm.basemodel[[j]],subset(data, select=-c(sample,gender,msi,Class)), decision.values = TRUE, probability = TRUE)}
+      # Sum the probability of every input data predicted as male_mss class.
+      svm.sum.prob <- svm.sum.prob + attr(ovaSVM.predict, "probabilities")[,"1"] / ovaSVM.prob[j]
+    }
+    # Use mean of the probability to represent the probability result for every input data.
+    # Scale the probability of predition result to the range of 0~1.
+    ovaSVM.results$male_mss.prediction <- (svm.sum.prob / n) / max(svm.sum.prob / n)
+    # Save every svm model imformation in ovaSVM.results.
+    ovaSVM.results$male_mss.svm <- svm.basemodel
+    # Combine the probability results with input data.
+    ovaSVM.alldata <- cbind(ovaSVM.alldata,
+                                male_mss.prob = round(ovaSVM.results$male_mss.prediction, digits = 4))
+
+
+    # Return the results of one vs all SVM model.
+    assign("ovaSVM.results", ovaSVM.results, envir = globalenv())
+    assign("ovaSVM.alldata",ovaSVM.alldata, envir = globalenv())
+}
+```
+
+### 3.2.3 - Train one-vs-all SVM model and predict probability.
+```{r}
+# Setting seed for reproducibility
+set.seed(42)
+# Need comments for these values
+cost = exp(seq(-1.3, 4,length.out = 7))
+gamma = exp(seq(-3, 0.3, length.out = 7))
+```
+
+### 3.2.4 - Get the probability of match and mismatch for the training dataset
+```{r}
+train_results <- ovaSVM(data, k = 4, n = 20, gamma = gamma, cost = cost)
+
+cls_prob <- ovaSVM.alldata[,c(36:39)]
+cls <- ovaSVM.alldata$Class
+store.train <- data.frame(matrix(ncol = 5, nrow = length(cls)))
+x <- c("sample","true_label","match_prob","mismatch_prob","pred.label")
+colnames(store.train) <- x
+for (i in 1:length(cls)) {
+  store.train$sample[i] = as.character(ovaSVM.alldata$sample[i])
+  store.train$true_label[i] = as.integer(ovaSVM.alldata$mismatch[i])
+  store.train$match_prob[i]= cls_prob[i,ovaSVM.alldata$Class[i]]
+  store.train$mismatch_prob[i] = 1-cls_prob[i,ovaSVM.alldata$Class[i]]
+  if (store.train$match_prob[i]>0.5){
+    store.train$pred.label[i] = 0
+  }
+  else {
+    store.train$pred.label[i] = 1
+  }
+}
+store.train
+```
+
+### 3.2.5 - Get the probability of match and mismatch for the testing dataset
+```{r}
+test_results <- ovaSVM(test_data, k = 4, n = 20, gamma = gamma, cost = cost)
+
+# Get the probability of match and mismatch
+cls_prob <- ovaSVM.alldata[,c(36:39)]
+cls <- ovaSVM.alldata$Class
+store.test <- data.frame(matrix(ncol = 5, nrow = length(cls)))
+x <- c("sample","true_label","match_prob","mismatch_prob","pred.label")
+colnames(store.test) <- x
+for (i in 1:length(cls)) {
+  store.test$sample[i] = as.character(ovaSVM.alldata$sample[i])
+  store.test$true_label[i] = as.integer(ovaSVM.alldata$mismatch[i])
+  store.test$match_prob[i]= cls_prob[i,ovaSVM.alldata$Class[i]]
+  store.test$mismatch_prob[i] = 1-cls_prob[i,ovaSVM.alldata$Class[i]]
+  if (store.test$match_prob[i]>0.5){
+    store.test$pred.label[i] = 0
+  }
+  else {
+    store.test$pred.label[i] = 1
+  }
+}
+store.test
+```
+
+
+
+## 3.3 - Classification procedure Approach 3: Ensemble method of SVM, KNN and LDA
+Our third approach is motivated by Canning et al. (2018) who applied an ensemble method consisting of a Support Vector Machine (SVM), K-nearest neighbours as well as a Linear Discrimanatory models to classify  synthetically generated binary data with noisy. This approach also makes use of the baruta feature extraction methods and hybrid weighting to attempt to solve the class imbalancing problem.
+
+### 3.3.1 - SVM
+In this approach for the SVM a one-vs-one model is implemented. The benefit of the one-vs-one model is that it doesn't cause a class imbalance method. For unbiased results the models are predicted using 5 fold cross validation. The SVM model fits two supporting hyperplanes such that the orthogonal distance between them is $2 ||w||$ the $w$ that maximizes this distance can be shown as
+
+$$
+\hat{f}_{SVM} = \arg \max_w \sum|| w||^2 + \sum y_i y_j c_i c_j K(x_i,x_j)
+$$
+Where $K(\cdot , \cdot)$ is the kernel mapping of two points, and $c_i$ is the penalty term for mislabelled observations. Under some assumptions on how the noise is generated Canning et al. (2018) proves that SVM is asymptotically consistent to noise. Next we compared 4 types of kernels: linear, polynomial and radial. The radial kernel performed the best. Similar to the other approaches the SVM is only trained on the clean portion of the training data. Finally predictions are made both on the observations class, but also the conditional probabilities of each observation.
+```{r}
+unloadNamespace('MOFAtools')
+
+# Fitting SVM - One VS One
+train_labels = df.upsample$Class
+train_data = df.upsample[,names(df.upsample) %in% feature[6:length(feature)]]
+
+test_labels = merged_dfs_test$Class
+test_data = merged_dfs_test[,names(merged_dfs_test) %in% feature[6:length(feature)]]
+
+ctrl <- trainControl(method = 'repeatedcv', repeats = 5, classProbs = T)
+svm <- caret::train(x = train_data,
+                           y = factor(train_labels,labels=make.names('') ),
+                           method='svmPoly', trControl=ctrl)
+
+# Predicting SVM on training data
+pred.prob.svm.tn <- predict(svm, train_data, type = 'prob')  # Probability of each class
+pred.cls.svm.tn <- predict(svm, train_data)                  # Predicted classes
+
+# Predicting SVM on test data
+pred.prob.svm.ts <- predict(svm, test_data, type='prob')
+pred.cls.svm.ts <- predict(svm, test_data)
+
+# Accuracy on training data:
+acc(as.numeric(pred.cls.svm.tn), train_labels)
+
+# Accuracy on training data:
+acc(as.numeric(pred.cls.svm.ts), test_labels)
+```
+
+### 3.3.2 - Linear Discrimantory Analysis
+The objective of LDA is generate uncorrelated discrimatory functions which seperate the classes. Each one of these functions is constructed as a linear combination of the features with the goal being maximizing the distance between classes similar to that of SVM. However unlike SVM there are multiple functions for each class. The lda function within the MASS library uses a Bayesian approach to maximize the likelihood of each observation in the train set being its observed class. The assumed prior distribution was uniform. An alternative to a uniform distribution could have been the observed proportions however the imbalanced sample issue is assumed taken care of by the hybrid weighting method. The model appears to perform better than the SVM with a 94% accuracy on the training and a 41% accuracy on the test set.
+```{r}
+library('MASS')
+# Fitting LDA - One VS One
+lda <- lda(x = train_data,
+           grouping = train_labels,
+           prior = c(1,1,1,1)/4,
+           cv = 5)
+
+# Predicting LDA on training data
+pred.lda.tn <- predict(lda, train_data, prob=TRUE)
+pred.prob.lda.tn <- pred.lda.tn$posterior
+pred.cls.lda.tn <- pred.lda.tn$class
+
+# Predicting LDA on test data
+pred.lda.ts <- predict(lda, test_data, prob=TRUE)
+pred.prob.lda.ts <- pred.lda.ts$posterior
+pred.cls.lda.ts <- pred.lda.ts$class
+
+# Accuracy on training data:
+acc(pred.cls.lda.tn, train_labels)
+
+# Accuracy on Test data
+acc(pred.cls.lda.ts, test_labels)
+
+```
+
+### 3.3.3 - K-Nearest Neighbours (KNN)
+The KNN algorithm aims to fullfill the following objective function
+$$
+\hat{f}_{KNN} = \arg \min_C \sum_{k=1}^K\sum_{i}^C ||x_i - \mu_k||^2
+$$
+Where $\mu_k$ is the $k^th$  centroid , $C$ is the number of observation in the $k^th$ class. Therefore KNN assigns centroids which minimize the euclidean distance between each observation and their class. KNN was used to because the model does not require an underlying distribution assumption. However we do note that although the there is not an underlying distribution the model can be susceptible to class imbalance. However assuming class imbalance does not introduce bias, the model should perform well. Interestingly the optimal number of clusters fit were 5.
+
+```{r}
+# Fitting KNN
+knn <- caret::train(train_data,factor(train_labels, labels=make.names(c(''))), method='knn', trControl=ctrl)
+
+# Predicting Knn
+pred.prob.knn.tn <- predict(knn, train_data, type = 'prob')
+pred.cls.knn.tn <- predict(knn, train_data)
+pred.prob.knn.ts <- predict(knn, test_data, type='prob')
+pred.cls.knn.ts <- predict(knn, test_data)
+
+# Accuracy on training data:
+acc(as.numeric(pred.cls.knn.tn), train_labels)
+
+# Accuracy on training data:
+acc(as.numeric(pred.cls.knn.ts), test_labels)
+```
+
+### 3.3.4 - Ensemble
+The ensemble itself is implemented by combining the class predictions into a dataframe and then passing that dataframe in to a custom $vote$ function. This function works by setting $C = mode(x_1,...,x_n)$ however if multiple multiple classifications receive the same number of votes a random selection is made between the two classes under a uniform distribution assumption. Finally probabilities of classification and misclassification are calculated by (1) and correctly classified is shown in (2)
+$$
+\begin{align}
+P(mislabelled) &= \frac{1}{m}\sum^m\sum_{i \in C, i\neq c}^C P(Y_i)\\
+P(correct) &= \frac{1}{m}\sum^mP(Y_c)
+\end{align}
+$$
+Where $c$ is the correct class, $P(Y_i)$ is the probability for class $i$ across classifiers for a given model and m is the number of classifiers. The mislabelled probability is assumed to be the average probability of all incorrect classes across all classifiers.
+```{r}
+# Grouping the predictions and passing them into the vote function
+final.cls.tn <- vote(cbind(as.integer(pred.cls.knn.tn),pred.lda.tn$class, as.integer(pred.cls.svm.tn)))
+
+# Accuracy for train
+acc(final.cls.tn, train_labels)
+
+# Grouping the predictions to pass into the vote function
+final.cls.ts <- vote(cbind(pred.cls.knn.ts,pred.lda.ts$class, pred.cls.svm.ts))
+
+# Accuracy for test
+acc(final.cls.ts, test_labels)
+
+# Calculating the probability of correctly specified as well as incorrectly with the custom function probcorr (short for probability correct)
+probabilities.tn <- cbind(train_labels, pred.prob.svm.tn, pred.prob.knn.tn, pred.prob.lda.tn)
+probs.tn <- probcorr(probabilities.tn)
+misclass.tn <- ifelse(final.cls.tn==train_labels, 0,1)
+
+# Calculating the probability of correctly specified as well as incorrectly with the custom function probcorr (short for probability correct)
+probabilities.ts <- cbind(test_labels, pred.prob.svm.ts, pred.prob.knn.ts, pred.prob.lda.ts)
+probs.ts <- probcorr(probabilities.ts)
+misclass.ts <- ifelse(final.cls.ts==test_labels, 0,1)
+
+```
+
+# 4 - Validation Methods
+
+We use cross validation to compare and evaluate all of the proposed models (including the benchmark) However, because the provided test set contains noisy labels which are unknown we are unable to accurately use the provided test set for accurate cross valiation.
+
+To mitigate the lack of certainty with no test label data, the group created 99% confidence intervals, as shown in 4.
+
+Therefore we use the 20 previously held out observations to compare performance of our models. We evaluate their performance using accuracy and F1 score metrics on both the training and pseudo test data, then visualize their perfomance using ROC curves.
+Finally we compare the best performing model to a benchmark model on the same dataset to evaluate the model independent from the sample selection method.
+
+### 4.1.1 Benchmark evaluations
+```{r}
+unloadNamespace('MOFAtools')
+source('./PrepFunctions.R')
+
+# Bench marking on the training data
+TrainSet            <- subset(merged_dfs_train, select= -c(sample,gender,msi,Class,mismatch))
+pred.prob.bm.tn     <- predict(model_rf, TrainSet, type="prob")
+pred.cls.bm.tn      <- predict(model_rf, TrainSet)
+probabilities.bm.tn <- cbind(merged_dfs_train$Class,pred.prob.bm.tn)
+probs.bm.tn         <- probcorr(probabilities.bm.tn)
+misclass.bm.tn      <- ifelse(pred.cls.bm.tn==merged_dfs_train$Class, 0,1)
+
+# Bench marking on the test data
+TestSet             <- subset(merged_dfs_test, select= -c(sample,gender,msi,Class,mismatch))
+pred.prob.bm.ts     <- predict(model_rf, TestSet, type = 'prob')
+pred.cls.bm.ts      <- predict(model_rf, TestSet)
+probabilities.bm.ts <- cbind(merged_dfs_test$Class, pred.prob.bm.ts)
+probs.bm.ts         <- probcorr(probabilities.bm.ts)
+misclass.bm.ts      <- ifelse(pred.cls.bm.ts==merged_dfs_test$Class, 0,1)
+```
+
+### 4.1.2 Ensemble evaluations
+```{r}
+# Making predictions using the Ensemble method on the 60 observation training data.
+# Writing out predictions of the 80 true test observations (tt)
+train_labels = merged_dfs_train$Class
+train_data = merged_dfs_train[,names(merged_dfs_train) %in% feature[6:length(feature)]]
+
+# Predicting the class for each obsercation
+pred.cls.svm.tn  <- predict(svm, train_data)
+pred.lda.tn      <- predict(lda, train_data)
+pred.cls.lda.tn  <- pred.lda.tn$class
+pred.cls.knn.tn  <- predict(knn, train_data)
+
+# Calculating the probability of correctly specified as well as incorrectly with the custom function probcorr (short for probability correct)
+final.cls.tn     <- vote(cbind(as.integer(pred.cls.knn.tn),pred.lda.tn$class, as.integer(pred.cls.svm.tn)))
+probabilities.ts <- cbind(test_labels, pred.prob.svm.ts, pred.prob.knn.ts, pred.prob.lda.ts)
+probs.ts <- probcorr(probabilities.ts)
+misclass.tn      <- ifelse(final.cls.tn==train_labels, 0,1)
+```
+
+### 4.1.3 - Confusion matrix creations
+```{r}
+# Making confusion matrixes for train and pseudo test data using Ensemble and Augmented SVM method.
+cm.ens.tn <- confusionMatrix(as.factor(misclass.tn), merged_dfs_train$mismatch, mode='everything')
+cm.ens.ts <- confusionMatrix(as.factor(misclass.ts), merged_dfs_test$mismatch, mode='everything')
+cm.svm.tn <- confusionMatrix(as.factor(store.train$pred.label), merged_dfs_train$mismatch, mode='everything')
+cm.svm.ts <- confusionMatrix(as.factor(store.test$pred.label), merged_dfs_test$mismatch, mode='everything')
+cm.bm.tn <- confusionMatrix(as.factor(misclass.bm.tn), merged_dfs_train$mismatch, mode='everything')
+cm.bm.ts <- confusionMatrix(as.factor(misclass.bm.ts), merged_dfs_test$mismatch, mode='everything')
+```
+
+### 4.2.1 - Accuracy
+We measure both accuracy on both the training and the 20 pseudo test observations. We observe the performance of both models to be relatively similar in the training set, with both performing well with 90+% accuracy. Furthermore, both models perform relatively well in the pseudo test set with the Augmented SVM returning approximately 85% accuracy and the Ensemble method returning roughly 95% accuracy. This is also an improvement to the benchmark model that had roughly 86% accuracy.
+
+Given the major class imbalance problem esspecially in the pseudo test set, the accuracy measure is likely to be biased towards models that predict a large number of negative class mislabels (0s).
+
+```{r}
+cat('Accuracy for ensemble on train:', cm.ens.tn$overall['Accuracy'])
+cat('\nAccuracy for ensemble on test:', cm.ens.ts$overall['Accuracy'])
+cat('\nAccuracy for augmented svm on train:', cm.svm.tn$overall['Accuracy'])
+cat('\nAccuracy for augmented svm on test:', cm.svm.ts$overall['Accuracy'])
+cat('\nAccuracy for benchmark on train:', cm.bm.tn$overall['Accuracy'])
+cat('\nAccuracy for benchmark on test:', cm.bm.ts$overall['Accuracy'])
+
+```
+
+### 4.2.2 F1 Score
+The benefit of using F1 scores to compare models is that it provides a balance of recall and precision, and shows greater insight than accuracy when there is a high class imbalance, as is the the case with this project.
+Having a high accuracy may just show the model can perform well on predicting 0s on a imbalanced class distribution, however the F1 will allow us to see where we have predicted positives correctly (true positive) or have in fact missed predictions.
+
+Compared to the F1 score of those two models, we also found the Ensemble - Classification Procedure 3 model have a higher F1 score which confirmed our hypothesis before.
+Based on the recall and precision of those two models, we can infer that both one-vs-all model and Ensemble - Classification Procedure 3 model have the same prediction for the correctted label, but Ensemble - Classification Procedure 3 model performs better when predicting the mismtached label.
+
+## 4.3 Displaying F1 for ensemble, augmented svm and benchmark
+```{r}
+cat('F1 for ensemble on train:', cm.ens.tn$byClass['F1'])
+cat('\nF1 for ensemble on test:', cm.ens.ts$byClass['F1'])
+cat('\nF1 for augmented svm on train:', cm.svm.tn$byClass['F1'])
+cat('\nF1 for augmented svm on test:', cm.svm.ts$byClass['F1'])
+cat('\nF1 for benchmark on train:', cm.bm.ts$byClass['F1'])
+cat('\nF1 for benchmark on test:', cm.bm.ts$byClass['F1'])
+```
+
+## 4.4 Plotting Receive operating curves
+```{r}
+# Constructing ROC curves for train and test set for Ensemble Method
+pred <- prediction(misclass.tn, merged_dfs_train$mismatch);
+auc.tmp <- ROCR::performance(pred,"auc");
+auc <- as.numeric(auc.tmp@y.values)
+plot(ROCR::performance(pred, "tpr", "fpr"), main=paste('Ensemble method on Train',round(auc,2)))
+
+pred <- prediction(misclass.ts, merged_dfs_test$mismatch);
+auc.tmp <- ROCR::performance(pred,"auc");
+auc <- as.numeric(auc.tmp@y.values)
+plot(ROCR::performance(pred, "tpr", "fpr"), main=paste('Ensemble method on pseudo Test',round(auc,2)))
+
+# Constructing ROC curves for train and test set for Augmented SVM Method
+pred <- prediction(store.train$pred.label, merged_dfs_train$mismatch);
+auc.tmp <- ROCR::performance(pred,"auc");
+auc <- as.numeric(auc.tmp@y.values)
+plot(ROCR::performance(pred, "tpr", "fpr"), main=paste('Augmented SVM method on Train',round(auc,2)))
+
+pred <- prediction(store.test$pred.label, merged_dfs_test$mismatch);
+auc.tmp <- ROCR::performance(pred,"auc");
+auc <- as.numeric(auc.tmp@y.values)
+plot(ROCR::performance(pred, "tpr", "fpr"), main=paste('Augmented SVM method on pseudo Test',round(auc,2)))
+
+# Constructing ROC curves for train and test set for Benchmark
+pred <- prediction(misclass.bm.tn, merged_dfs_train$mismatch);
+auc.tmp <- ROCR::performance(pred,"auc");
+auc <- as.numeric(auc.tmp@y.values)
+plot(ROCR::performance(pred, "tpr", "fpr"), main=paste('Benchmark method on Train',round(auc,2)))
+
+pred <- prediction(misclass.bm.ts, merged_dfs_test$mismatch);
+auc.tmp <- ROCR::performance(pred,"auc");
+auc <- as.numeric(auc.tmp@y.values)
+plot(ROCR::performance(pred, "tpr", "fpr"), main=paste('Benchmark method on pseudo Test',round(auc,2)))
+```
+
+### 4.5 - Discussion around sample error rate and mismatched sample count
+We have labelling errors to around 10% of the samples for the proteomics data and RNA-Seq data, respectively, and labelling errors to around 5% of the samples in the clinical information table. Also sample labelling errors were not shared across different types of data. Thus we assume the original dataset would have 15% of mismatched samples.
+
+To counter the issues with the lack of label test data, the group has used 99% confidence intervals to provide an estimate of the mislabel values by taking the - 12 - observed number of mislabels from training. Given this we have 99% confidence that the mismatch samples of the test dataset were located in range from 4 ~ 20.
+
+By checking our two models, the one-vs-all model () predicted 27 mismatch samples for the test dataset, and the Ensemble - Classification Procedure 3 model predicted 21 mismatch sample in training and 55 mismatch samples for the test dataset. This is discussed in more detail in the Conclusion in part 5.
+
+```{r}
+Top_bound <- (2.576 * sqrt(0.15*(1-0.15)/80) + 0.15) * 80
+Top_bound
+Bot_bound <- (-2.576 * sqrt(0.15*(1-0.15)/80) + 0.15) * 80
+Bot_bound
+```
+# 5 - Results and conclusions
+
+The above analysis shows a minor decrease in F1 and AUC of approximately 5-10% respectively between training and test. As expected both classification procedures 2 and 3 outperformed the benchmark model on the same upsampled data set however the difference was minor. The benchmarked model also outperformed the augmented svm approach. Given that both the good performing models, benchmark random forest as well as the ensemble method, were both trained on the upsampled model we can conclude that the complexity of the model was geratly reduced by the implementation of upsampling for the ensembled Classification procedure 3 as well as the custom downsampling for Classification procedure 2.
+
+Although the ensemble method out performed well relative to the benchmark model there is relatively minor performance increases in the metrics particularly accuracy. However, as aforementioned improvements in  accuracy is not the aim of this analysis because of the large class imbalancing. Looking at the differences in the F1 score better highlights the models ability to learn even with the class imbalance.
+
+Using the model to predict on the true test data and train data the ensemble model performs well as expected. We are unable to make assumptions about the performance on the true test set however we can observe the number of predicted mismatches. The ensemble classifier predicts 55 mismatches. We know from the information provided that the expected number of mismatches in the true test set is the same as the true training set, 12. Therefore we can conclude that on a larger dataset ourensemble model is more likely to over estimate the probability of mismatched sample.
+
+Our analysis into the training clinical and proteomic datasets identified 3 key problems with the data. Firstly, a large class imbalance both in the binary, label mismatch, and multiclass, msi and gender, cases. We addressed this issue by implementing a range of sampling methods, deciding that the random upsampling method performed the best for the ensemble, and downsampling for the augmented SVM approach. The second issue was high dimensionality. We used feature selection with both a heuristic and analytic approach from the boruta technique in 2.3. Our conclusion of small subset of features was backed up by the MOFA and PCA analysis. Finally, given the lack of a labelled test set to compare performance we split the given data into an 75, 25% split. After accounting for the errors in the data we implemented 3 separate methods for the training data set and 2 preferred models for the test data: the augmented svm and the ensemble method.
+
+Applying the ensemble model to the true test and train dataset we see a decrease in performance. Especially for the actual test data set. The group suggests that the large distribution change between train and test data for the male vs female class has skewed the learning of the classification model in test. Whilst the class imbalance goes some way to mitigate this, the training model does not generalise well to the test data:
+
+Clinical Training Data Distribution:
+- 62 MSI-Low/MSS vs 18 MSI-High
+- 53 Female vs 27 Male
+
+Clinical Test Data Distribution:
+- 66 MSI-Low/MSS vs 12 MSI-High
+- 31 Female vs 49 Male
+
+# 5.1 - Critical thinking and further development
+Upon review, the group suggests the following areas for further development:
+
+- The use of a preferred model to re-classify mislabeled samples to use as input for positive unlabelled data classification method (Eg Adasample)
+- Further investigation into dimensionality reduction techniques
+
+## 5.2 Saving the training predictions and associated probabilities
+```{r}
+# Writing out predictions of the 80 true test observations (tt)
+true_train_labels = merged_dfs$Class
+true_train_data = merged_dfs[,names(merged_dfs_train) %in% feature[6:length(feature)]]
+
+# Predicting the probabilites for each class for each classifier
+pred.prob.svm.ttn <- predict(svm, true_train_data, type='prob')
+pred.lda.ttn      <- predict(lda, true_train_data, type='prob')
+pred.prob.lda.ttn <- pred.lda.ttn$posterior
+pred.prob.knn.ttn <- predict(knn, true_train_data, type='prob')
+
+# Predicting the class for each obsercation
+pred.cls.svm.ttn <- predict(svm, true_train_data)
+pred.cls.lda.ttn <- pred.lda.ttn$class
+pred.cls.knn.ttn <- predict(knn, true_train_data)
+
+# Calculating the probability of correctly specified as well as incorrectly with the custom function probcorr (short for probability correct)
+final.cls.ttn     <- vote(cbind(as.integer(pred.cls.knn.ttn),pred.lda.ttn$class, as.integer(pred.cls.svm.ttn)))
+probabilities.ttn <- cbind(true_train_labels, pred.prob.svm.ttn, pred.prob.lda.ttn, pred.prob.lda.ttn)
+probs.ttn         <- probcorr(probabilities.ttn)
+misclass.ttn         <- ifelse(final.cls.ttn==true_train_labels, 0,1)
+
+write.csv(data.frame(mismatch = misclass.ttn,
+                     proba_mismatch = probs.ttn[,2]),
+                     'train_data_predictions.csv')
+```
+
+## 5.3 - Saving the testing predictions and associated probabilities
+```{r}
+# Writing out predictions of the 80 true test observations (tt)
+true_test_labels = merged_orig_test$Class
+true_test_data = merged_orig_test[,names(merged_orig_test) %in% feature[6:length(feature)]]
+
+# Predicting the probabilites for each class for each classifier
+pred.prob.svm.tts <- predict(svm, true_test_data, type='prob')
+pred.lda.tts      <- predict(lda, true_test_data, type='prob')
+pred.prob.lda.tts <- pred.lda.tts$posterior
+pred.prob.knn.tts <- predict(knn, true_test_data, type='prob')
+
+# Predicting the class for each obsercation
+pred.cls.svm.tts <- predict(svm, true_test_data)
+pred.cls.lda.tts <- pred.lda.tts$class
+pred.cls.knn.tts <- predict(knn, true_test_data)
+
+# Calculating the probability of correctly specified as well as incorrectly with the custom function probcorr (short for probability correct)
+final.cls.tts     <- vote(cbind(as.integer(pred.cls.knn.tts),pred.lda.tts$class, as.integer(pred.cls.svm.tts)))
+probabilities.tts <- cbind(true_test_labels, pred.prob.svm.tts, pred.prob.lda.tts, pred.prob.lda.tts)
+probs.tts         <- probcorr(probabilities.tts)
+misclass.tts         <- ifelse(final.cls.tts==true_test_labels, 0,1)
+write.csv(data.frame(mismatch = misclass.tts,
+                     proba_mismatch = probs.tts[,2]),
+                     'test_data_predictions.csv')
+```
+
+```{r}
+session_info()
+```
+
